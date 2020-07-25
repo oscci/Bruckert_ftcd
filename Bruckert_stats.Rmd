@@ -104,6 +104,8 @@ plot(fTCD_dat_short$LI.y,fTCD_dat_short$pptt2.LI)
 ```
 
 #Preregistered Hypotheses
+see https://osf.io/bcxus?view_only=c1d70b530f074cdbb036eccadfb6dd87
+
 Hypoethesis 1
 Stronger left lateralization for the expressive than the receptive task
 
@@ -137,7 +139,60 @@ colnames(fTCD_dat_x)[3:4]<-c('WordGen','PPTT')
 
 fTCD_mod_dat<- melt(fTCD_dat_x) 
 colnames(fTCD_mod_dat) <- c('id','hand','task','LI')
-mod0<-lme(fixed=LI~1+hand+task, random=list(id=pdSymm(form=~1)),data=fTCD_mod_dat, na.action="na.exclude", method="REML")
+```
+In chunk below I just try to work through website explanations
+
+```{r model_explanations}
+#Model with homogenous variances
+# Common models for between and within person variance
+
+#Minimalist model added from: https://quantdev.ssri.psu.edu/sites/qdev/files/ILD_Ch06_2017_MLMwithHeterogeneousVariance.html
+
+
+mod0.1<-lme(fixed=LI~1,
+          random= ~ 1|id,
+          data=fTCD_mod_dat, 
+          method="REML")
+
+#This just shows you get the same result with this version
+# pdSymm() indicates that the random effects are structured as a positive-definite Symmetric matrix
+
+model.01a = lme(fixed = LI ~ 1,  
+               random = list(id = pdSymm(form = ~ 1)),
+                       data = fTCD_mod_dat,
+                   method = 'REML')
+summary(model.01a)
+VarCorr(model.01a)
+
+# Heterogeneity for between variance and common within person variance
+model.01b = lme(fixed = LI ~ 1,  
+                random = list(id = pdDiag(form = ~ Handedness)),
+                        data = fTCD_mod_dat,
+                    method = 'REML')
+summary(model.01b)
+VarCorr(model.01b)
+#I don't understand this - it shows virtually no variance for Handedness
+
+# Heterogeneity for both between and within person variance
+model.01c = lme(fixed = LI ~ 1,  
+                random = list(id = pdDiag(form = ~ Handedness)),
+                weights = varIdent(form = ~ 1 | Handedness),
+                        data = fTCD_mod_dat,
+                    method = 'REML')
+summary(model.01c)
+VarCorr(model.01c)
+#Nope - this is different but not sure what it is telling me
+```
+
+
+This is the version we used for the paper, which closely follows worked eg on website
+
+```{r model1}
+
+mod0<-lme(fixed=LI~1+hand+task, 
+          random=list(id=pdSymm(form=~1)),
+          data=fTCD_mod_dat, 
+          method="REML")
 
 #to extract the results with pvalue (t-test for marginal significance of each fixed effect with other fixed effects)
 summary(mod0)
@@ -148,9 +203,13 @@ VarCorr(mod0)
 
 #----------------------------------------------------------------------------------#
 
-# Heterogeneous model variance (between-person)
+# Heterogeneous model variance (between-person) and common within person
 ```{r heteromodel}
-mod1<-lme(fixed=LI ~ 1 + hand + task, random=list(id=pdDiag(form= ~ 0 + hand)),data=fTCD_mod_dat,na.action="na.exclude",method="REML")
+mod1<-lme(fixed=LI ~ 1 + hand + task, 
+          random=list(id=pdDiag(form= ~ 0 + hand)),
+          data=fTCD_mod_dat,
+          na.action="na.exclude",
+          method="REML")
 
 summary(mod1)
 
@@ -164,11 +223,16 @@ anova(mod0,mod1)
 
 #----------------------------------------------------------------------------------#
 
-As we find no difference, we can check for heterogeneous within-person
+We then can check for heterogeneous within-person: except that with 2 groups will have same DF as model 1 - so not feasible?
 
 # Heterogeneous model variance (within-person)
 ```{r hetero2}
-mod2<-lme(fixed=LI ~ 1 + hand + task, random = list(id=pdSymm(form = ~1 )), weights=varIdent(form=~1 | hand), data=fTCD_mod_dat, na.action=na.exclude, method="REML")
+mod2<-lme(fixed=LI ~ 1 + hand + task, 
+          random = list(id=pdSymm(form = ~1 )), 
+          weights=varIdent(form=~1 | hand), 
+          data=fTCD_mod_dat, 
+          na.action=na.exclude, 
+          method="REML")
 
 summary(mod2)
 
