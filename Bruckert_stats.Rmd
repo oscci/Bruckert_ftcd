@@ -1,0 +1,293 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+Scrpt from: https://osf.io/bjrhw/?view_only=c1d70b530f074cdbb036eccadfb6dd87
+
+Deposited on Github by DVMB 25th July 2020.
+Updated to check Ns for writeup - checked exclusions: total with data on both tasks is 151. Corrections made.
+
+
+
+```{r checkpackages}
+
+#Check for required R packages and install if not on system
+
+list.of.packages <- c("nlme")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+library(nlme)
+#library(lmerTest)
+library(stringr)
+library(reshape2)
+library(ggplot2)
+require(tidyverse)
+```
+
+Load in data and clean if necessary.
+```{r loaddata}
+#rootdir <- "H:/github/DPhil_Chapter4_fTCD/"
+rootdir<-paste0(getwd(),'/')
+wordgen <- read.csv(paste0(rootdir,'WordGen_results.csv'), stringsAsFactors=FALSE) # The expressive task
+pptt <- read.csv(paste0(rootdir,'PPTT_results.csv'), stringsAsFactors=FALSE)       # The receptive task
+
+
+
+demographics <- read.csv(paste0(rootdir,'Chpt4_fTCD_demographics.csv'), stringsAsFactors=FALSE)
+
+
+#Now we have three data frames that we need to merge into fTCD_dat
+#This has been altered by DB to keep all variables, as we want to be able to use them in later analyses
+#Note the wordgen and pptt variables are automatically renamed in merge as .x and .y
+
+#strip all IDs to first 3 characters - added by DB to check Ns
+wordgen$ID<- substr(wordgen$Filename, start = 1, stop = 3)
+pptt$ID <- substr(pptt$Filename,start=1,stop=3)
+demographics$ID<- substr(demographics$ID,start=1,stop=3)
+#There are 154 with data on both tasks and also on demographics
+
+fTCD_dat <- merge(demographics,wordgen,by="ID") 
+fTCD_dat <- merge(fTCD_dat,pptt,by="ID")
+
+
+# Will just delete those with exclusion in either 
+
+bothexclude<-fTCD_dat$exclusions.x+fTCD_dat$exclusions.y
+fTCD_dat_short <- fTCD_dat[bothexclude==0, ] # Removes excluded participants
+
+table(fTCD_dat_short$sex,fTCD_dat_short$hand_self_report)
+
+```
+
+# Normality tests
+```{r normtests}
+shapiro.test(fTCD_dat_short$LI.x[fTCD_dat_short$hand_self_report==1])
+shapiro.test(fTCD_dat_short$LI.x[fTCD_dat_short$hand_self_report==0])
+shapiro.test(fTCD_dat_short$LI.y[fTCD_dat_short$hand_self_report==1])
+shapiro.test(fTCD_dat_short$LI.y[fTCD_dat_short$hand_self_report==0])
+```
+
+# Reliability (added by DB)
+```{r reliabilities}
+
+wgr <- cor.test(fTCD_dat_short$odd.x,fTCD_dat_short$even.x)
+plot(fTCD_dat_short$odd.x,fTCD_dat_short$even.x) #Word gen
+wgp <- cor.test(fTCD_dat_short$odd.y,fTCD_dat_short$even.y)
+plot(fTCD_dat_short$odd.y,fTCD_dat_short$even.y) #PPTT
+
+pptt2<-read.csv('pptt_retest_results.csv',stringsAsFactors=F)
+wg2<-read.csv('wordgen_retest_results.csv',stringsAsFactors=F)
+pptt2$ID <- substr(pptt2$Filename,start=8,stop=10)
+wg2$ID <- substr(wg2$Filename,start=8,stop=10)
+
+p2 <- select(pptt2,ID,LI)
+w2<- select(wg2,ID,LI)
+colnames(p2)[2]<-'LI'
+colnames(w2)[2]<-'LI'
+fTCD_dat_short$wg2.LI <- NA
+fTCD_dat_short$pptt2.LI <- NA
+
+#all files are rank ordered so can use %in%
+
+w<-which(fTCD_dat_short$ID %in% w2$ID)
+fTCD_dat_short$wg2.LI[w] <- w2$LI
+w<-which(fTCD_dat_short$ID %in% p2$ID)
+fTCD_dat_short$pptt2.LI[w] <- p2$LI
+
+wgr2 <- cor.test(fTCD_dat_short$LI.x,fTCD_dat_short$wg2.LI)
+ppttr2 <- cor.test(fTCD_dat_short$LI.y,fTCD_dat_short$pptt2.LI)
+
+plot(fTCD_dat_short$LI.x,fTCD_dat_short$wg2.LI)
+plot(fTCD_dat_short$LI.y,fTCD_dat_short$pptt2.LI)
+
+```
+
+#Preregistered Hypotheses
+Hypoethesis 1
+Stronger left lateralization for the expressive than the receptive task
+
+We fit the heterogenous and homogeneous models, chose the optimal fitting model and then interpret the main effect of task.
+
+Hypothesis 2: stronger left lateralization for right handers than left handers
+
+  Model script to test Hypotheses 1 to 4
+#
+   Created 26/11/2018.
+   Modified 27/11/2018.
+   Syntax error fixed 11/12/2018
+
+Following the example procedure described here: https://quantdev.ssri.psu.edu/sites/qdev/files/ILD_Ch06_2017_MLMwithHeterogeneousVariance.html
+
+WE have chosen to use nlme rather than lme4 as the specification of heterogeneous within-person error is more convenient in nlme (lme4 is only implemented via a messy solution).
+
+We fit the heterogenous and homogeneous models, chose the optimal fitting model and then interpret the main effect of handedness.
+
+
+
+# Homogeneous variance model
+```{r homogmodel}
+#select relevant data and make long form
+
+fTCD_dat_x <- select(fTCD_dat_short,ID,hand_self_report,LI.x,LI.y)
+fTCD_dat_x$ID<-as.factor(fTCD_dat_x$ID)
+fTCD_dat_x$hand_self_report<-as.factor(fTCD_dat_x$hand_self_report)  
+colnames(fTCD_dat_x)[3:4]<-c('WordGen','PPTT')
+
+
+fTCD_mod_dat<- melt(fTCD_dat_x) 
+colnames(fTCD_mod_dat) <- c('id','hand','task','LI')
+mod0<-lme(fixed=LI~1+hand+task, random=list(id=pdSymm(form=~1)),data=fTCD_mod_dat, na.action="na.exclude", method="REML")
+
+#to extract the results with pvalue (t-test for marginal significance of each fixed effect with other fixed effects)
+summary(mod0)
+
+VarCorr(mod0)
+
+```
+
+#----------------------------------------------------------------------------------#
+
+# Heterogeneous model variance (between-person)
+```{r heteromodel}
+mod1<-lme(fixed=LI ~ 1 + hand + task, random=list(id=pdDiag(form= ~ 0 + hand)),data=fTCD_mod_dat,na.action="na.exclude",method="REML")
+
+summary(mod1)
+
+VarCorr(mod1)
+
+
+#Likelihood ratio test
+
+anova(mod0,mod1)
+```
+
+#----------------------------------------------------------------------------------#
+
+As we find no difference, we can check for heterogeneous within-person
+
+# Heterogeneous model variance (within-person)
+```{r hetero2}
+mod2<-lme(fixed=LI ~ 1 + hand + task, random = list(id=pdSymm(form = ~1 )), weights=varIdent(form=~1 | hand), data=fTCD_mod_dat, na.action=na.exclude, method="REML")
+
+summary(mod2)
+
+VarCorr(mod2)
+
+#extract variances for hand and see if they are different.
+
+#residual std deviation
+summary(mod2)$sigma
+
+#Residual variance of right hand (dependent on the order of factors)
+(summary(mod2)$sigma*1)^2
+
+#Residual variance of left hand
+(summary(mod2)$sigma*coef(mod2$modelStruct$varStruct,uncons=FALSE))^2
+
+```
+#----------------------------------------------------------------------------------#
+
+#Likelihood ratio test between homogeneous and heterogeneous withi-person
+
+anova(mod0,mod2)
+
+#------------------------------------------------------- ---------------------------#
+
+# Density plots (added by DB)
+I'll do these separately for the 2 tasks.
+This actually then looks as if the pattern is a bit different, with unimodal distribution for PPTT
+
+```{r densplots}
+# Change density plot fill colors by groups
+require(ggpubr) #had ggarrange for multiple panel plots
+handcode <- c('Left','Right')
+
+fTCD_mod_dat$Handedness <- as.factor(handcode[fTCD_mod_dat$hand])
+p1 <- ggplot(fTCD_mod_dat[fTCD_mod_dat$task=='WordGen',], aes(x=LI, fill=Handedness)) +
+  geom_density(alpha=0.4)+
+  xlim(-3,6)+
+ labs(title="Word generation", x ="")
+p2 <- ggplot(fTCD_mod_dat[fTCD_mod_dat$task=='PPTT',], aes(x=LI, fill=Handedness)) +
+  geom_density(alpha=0.4)+
+  xlim(-3,6)+
+   labs(title="Semantic Association",
+        x ="Laterality index")
+ggarrange(p1,p2, ncol = 1, nrow = 2,common.legend=T,legend="bottom")
+ggsave(
+  "fTCD_densplots.png",
+  width = 5, height = 8,
+  dpi = 300
+)
+
+```
+
+#Hypothesis 3: Significant correlation between expressive and receptive task
+
+#Test with Pearson's correlation
+
+#Hypothesis 4: More variable relationship between expressive and receptive tasks in
+
+#left handers than right handers
+
+#Test by comparing variability of cook's distance between groups using Fligner-Killeen test
+
+#----------------------------------------------------------------------------------#
+```{r corrsH3}
+#Pearson's correlation between expressive and receptive tasks
+
+H3_results <- cor.test(fTCD_dat_short$LI.x, fTCD_dat_short$LI.y)
+
+#Plot data
+fTCD_dat_short$Handedness <- as.factor(fTCD_dat_short$hand_self_report)
+levels(fTCD_dat_short$Handedness)<-handcode
+print(ggplot(fTCD_dat_short,aes(y=LI.y,x=LI.x,colour=Handedness))+geom_point(size=2)+theme_bw()+
+           labs(title="Laterality Indices",x ="Word Generation",y = "Semantic Association")
+      + scale_color_manual(values=c("orange1", "royalblue2")))
+```
+
+# Do analysis of outliers
+Fit a linear model to both handedness groups
+
+```{r linearmodel}
+mymod<-lm(LI.y~LI.x,data=fTCD_dat_short)
+
+#Calculate Cook's Distance for each participant
+cooks<-cooks.distance(mymod)
+fTCD_dat_short$cooks<-cooks
+
+Outlier <- 4*mean(cooks)
+fTCD_dat_short$Outlier<-0
+fTCD_dat_short$Outlier[fTCD_dat_short$cooks>Outlier]<-1
+table(fTCD_dat_short$Outlier)
+fTCD_dat_short$Outlier<-as.factor(fTCD_dat_short$Outlier)
+
+#Run the Fligner-Killeen test
+H4_p <- fligner.test(fTCD_dat_short$cooks ~ fTCD_dat_short$Handedness)$p.value
+```
+
+
+#plots
+```{r doplots}
+pcook <- ggplot(fTCD_dat_short, aes(y = LI.y, x = LI.x, colour = Handedness,pch=Outlier)) +
+  geom_point(size = 2) +
+  theme_bw() +
+  labs( x = "Word Generation LI", y = "Semantic Association LI") +
+  scale_color_manual(values = c("orange1", "royalblue2"))
+ggsave(
+  "fTCD_cooks.png",
+  width = 5, height = 5,
+  dpi = 300
+)  
+
+table(fTCD_dat_short$Outlier,fTCD_dat_short$Handedness)
+```
+
+
+
+# Pirate Plot
+library('yarrr')
+
+pirateplot(data=fTCD_mod_dat, LI~task*hand)
+
+
